@@ -285,20 +285,39 @@ const handleWebViewMessage = useCallback(
     }
 
     // Register mobile push notifications
-    if (message === "ZERIY_REGISTER_PUSH") {
-      const token = await registerForPushNotifications();
 
-      if (token && webViewRef.current) {
-        webViewRef.current.injectJavaScript(`
-          window.dispatchEvent(
-            new CustomEvent("ZERIY_PUSH_TOKEN", {
-              detail: ${JSON.stringify(token)}
-            })
-          );
-          true;
-        `);
-      }
+if (message === "ZERIY_REGISTER_PUSH") {
+  try {
+    const token = await registerForPushNotifications();
+
+    if (token && webViewRef.current) {
+      webViewRef.current.injectJavaScript(`
+        window.dispatchEvent(
+          new CustomEvent("ZERIY_PUSH_TOKEN", {
+            detail: ${JSON.stringify(token)}
+          })
+        );
+        true;
+      `);
     }
+  } catch (error) {
+    console.error("Native push error:", error);
+
+    if (webViewRef.current) {
+      webViewRef.current.injectJavaScript(`
+        window.dispatchEvent(
+          new CustomEvent("ZERIY_PUSH_ERROR", {
+            detail: ${JSON.stringify(error.message)}
+          })
+        );
+        true;
+      `);
+    }
+  }
+
+  return;
+}
+
   },
   [handleGoogleLogin]
 );
