@@ -274,53 +274,132 @@ export default function HomeScreen() {
   // ==========================================
 
 
+
 const handleWebViewMessage = useCallback(
   async (event) => {
     const message = event.nativeEvent.data;
 
-    // Existing Google login
+    // 1. Google Login
     if (message === "ZERIY_GOOGLE_LOGIN") {
       handleGoogleLogin();
       return;
     }
 
-    // Register mobile push notifications
+    // 2. Native Push Notification
+    if (message === "ZERIY_REGISTER_PUSH") {
+      try {
+        const token = await registerForPushNotifications();
 
-if (message === "ZERIY_REGISTER_PUSH") {
-  try {
-    const token = await registerForPushNotifications();
+        if (!token) {
+          throw new Error("Unable to generate Expo push token.");
+        }
 
-    if (token && webViewRef.current) {
-      webViewRef.current.injectJavaScript(`
+        webViewRef.current?.injectJavaScript(`
+          window.dispatchEvent(
+            new CustomEvent("ZERIY_PUSH_TOKEN", {
+              detail: ${JSON.stringify(token)}
+            })
+          );
+          true;
+        `);
+      } catch (error) {
+        console.error("Native push error:", error);
+
+        webViewRef.current?.injectJavaScript(`
+          window.dispatchEvent(
+            new CustomEvent("ZERIY_PUSH_ERROR", {
+              detail: ${JSON.stringify(
+                error.message || "Push registration failed"
+              )}
+            })
+          );
+          true;
+        `);
+      }
+
+      return;
+    }
+
+    // 3. Parse GPS request from website
+    let payload;
+
+    try {
+      payload = JSON.parse(message);
+    } catch {
+      return;
+    }
+
+    if (payload?.type !== "ZERIY_GET_CURRENT_LOCATION") {
+      return;
+    }
+
+    // Send GPS result back to website
+    const sendLocationResult = (result) => {
+      webViewRef.current?.injectJavaScript(`
         window.dispatchEvent(
-          new CustomEvent("ZERIY_PUSH_TOKEN", {
-            detail: ${JSON.stringify(token)}
+          new CustomEvent("zeriy:native-location", {
+            detail: ${JSON.stringify({
+              requestId: payload.requestId,
+              ...result,
+            })}
           })
         );
         true;
       `);
-    }
-  } catch (error) {
-    console.error("Native push error:", error);
+    };
 
-    if (webViewRef.current) {
-      webViewRef.current.injectJavaScript(`
-        window.dispatchEvent(
-          new CustomEvent("ZERIY_PUSH_ERROR", {
-            detail: ${JSON.stringify(error.message)}
-          })
+    try {
+      // Check location permission
+      let { status } =
+        await Location.getForegroundPermissionsAsync();
+
+      // Request permission if not granted
+      if (status !== "granted") {
+        const permission =
+          await Location.requestForegroundPermissionsAsync();
+
+        status = permission.status;
+      }
+
+      if (status !== "granted") {
+        throw new Error("Please allow location permission.");
+      }
+
+      // Check whether device location services are enabled
+      const servicesEnabled =
+        await Location.hasServicesEnabledAsync();
+
+      if (!servicesEnabled) {
+        throw new Error(
+          "Please turn on Location/GPS on your phone."
         );
-        true;
-      `);
+      }
+
+      // Get actual GPS coordinates
+      const position = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      sendLocationResult({
+        success: true,
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+      });
+
+    } catch (error) {
+      console.error("Native GPS error:", error);
+
+      sendLocationResult({
+        success: false,
+        error:
+          error.message || "Unable to get current location.",
+      });
     }
-  }
-
-  return;
-}
-
   },
   [handleGoogleLogin]
 );
+
 
 
   // ==========================================
@@ -407,15 +486,11 @@ if (message === "ZERIY_REGISTER_PUSH") {
   // WEBVIEW LOAD END
   // ==========================================
 
-  const handleLoadEnd = useCallback(() => {
-    if (splashTimer.current) {
-      clearTimeout(splashTimer.current);
-    }
+const handleLoadEnd = useCallback(() => {
+  if (splashHidden.current) return;
 
-    splashTimer.current = setTimeout(() => {
-      hideSplash();
-    }, 1000);
-  }, [hideSplash]);
+  hideSplash();
+}, [hideSplash]);
 
   // ==========================================
   // WEBVIEW ERROR
@@ -507,25 +582,22 @@ if (message === "ZERIY_REGISTER_PUSH") {
   // ==========================================
 
 
-useEffect(() => {
-  const checkLocationPermission = async () => {
-    try {
-      const { status } =
-        await Location.getForegroundPermissionsAsync();
+//useEffect(() => {
+//  const checkLocationPermission = async () => {
+//    try {
+//      const { status } =
+//        await Location.getForegroundPermissionsAsync();
 
-      // Ask only when permission has never been requested.
-      if (status === "undetermined") {
-        await Location.requestForegroundPermissionsAsync();
-      }
+//      if (status === "undetermined") {
+//        await Location.requestForegroundPermissionsAsync();
+//      }
+//    } catch (error) {
+//      console.log("Location permission error:", error);
+//    }
+//  };
 
-      // If already granted or denied, don't ask again automatically.
-    } catch (error) {
-      console.log("Location permission error:", error);
-    }
-  };
-
-  checkLocationPermission();
-}, []);
+//  checkLocationPermission();
+//}, []);
 
 
 // ==========================================
@@ -552,7 +624,7 @@ useEffect(() => {
       uri: `${WEBSITE_URL}${notificationUrl}`,
     });
 
-    setShowSplash(false);
+ 
   };
 
   // Handle notification tapped while app is running/backgrounded.
