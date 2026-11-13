@@ -23,6 +23,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import * as WebBrowser from "expo-web-browser";
 import * as Linking from "expo-linking";
 import { useLocalSearchParams } from "expo-router";
+ 
+import * as Notifications from "expo-notifications";
+import { registerForPushNotifications } from "../../lib/notifications";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -270,14 +273,36 @@ export default function HomeScreen() {
   // WEBSITE MESSAGE
   // ==========================================
 
-  const handleWebViewMessage = useCallback(
-    (event) => {
-      if (event.nativeEvent.data === "ZERIY_GOOGLE_LOGIN") {
-        handleGoogleLogin();
+
+const handleWebViewMessage = useCallback(
+  async (event) => {
+    const message = event.nativeEvent.data;
+
+    // Existing Google login
+    if (message === "ZERIY_GOOGLE_LOGIN") {
+      handleGoogleLogin();
+      return;
+    }
+
+    // Register mobile push notifications
+    if (message === "ZERIY_REGISTER_PUSH") {
+      const token = await registerForPushNotifications();
+
+      if (token && webViewRef.current) {
+        webViewRef.current.injectJavaScript(`
+          window.dispatchEvent(
+            new CustomEvent("ZERIY_PUSH_TOKEN", {
+              detail: ${JSON.stringify(token)}
+            })
+          );
+          true;
+        `);
       }
-    },
-    [handleGoogleLogin]
-  );
+    }
+  },
+  [handleGoogleLogin]
+);
+
 
   // ==========================================
   // INTERCEPT WEBVIEW NAVIGATION TO GOOGLE
@@ -462,9 +487,76 @@ export default function HomeScreen() {
   // LOCATION PERMISSION
   // ==========================================
 
-  useEffect(() => {
-    Location.requestForegroundPermissionsAsync().catch(() => { });
-  }, []);
+
+useEffect(() => {
+  const checkLocationPermission = async () => {
+    try {
+      const { status } =
+        await Location.getForegroundPermissionsAsync();
+
+      // Ask only when permission has never been requested.
+      if (status === "undetermined") {
+        await Location.requestForegroundPermissionsAsync();
+      }
+
+      // If already granted or denied, don't ask again automatically.
+    } catch (error) {
+      console.log("Location permission error:", error);
+    }
+  };
+
+  checkLocationPermission();
+}, []);
+
+
+// ==========================================
+// NATIVE PUSH NOTIFICATION TAP HANDLING
+// ==========================================
+
+useEffect(() => {
+  const handleNotificationTap = (response) => {
+    const data =
+      response.notification.request.content.data;
+
+    const notificationUrl = data?.url;
+
+    if (
+      typeof notificationUrl !== "string" ||
+      !notificationUrl.startsWith("/") ||
+      notificationUrl.startsWith("//")
+    ) {
+      return;
+    }
+
+    // Open the notification destination inside Zeriy WebView.
+    setSource({
+      uri: `${WEBSITE_URL}${notificationUrl}`,
+    });
+
+    setShowSplash(false);
+  };
+
+  // Handle notification tapped while app is running/backgrounded.
+  const subscription =
+    Notifications.addNotificationResponseReceivedListener(
+      handleNotificationTap
+    );
+
+  // Handle notification that launched the app from a closed state.
+  Notifications.getLastNotificationResponseAsync()
+    .then((response) => {
+      if (response) {
+        handleNotificationTap(response);
+      }
+    })
+    .catch((error) => {
+      console.log("Notification response error:", error);
+    });
+
+  return () => subscription.remove();
+}, []);
+
+
 
   // ==========================================
   // CLEANUP
