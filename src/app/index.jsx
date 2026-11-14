@@ -1,3 +1,4 @@
+
 import * as Location from "expo-location";
 import React, {
   useState,
@@ -9,13 +10,13 @@ import React, {
 import {
   StyleSheet,
   View,
-  ActivityIndicator,
   StatusBar,
+  Alert,
+  BackHandler,
   Image,
   Text,
+  ActivityIndicator,
   Animated,
-  BackHandler,
-  Alert,
 } from "react-native";
 
 import { WebView } from "react-native-webview";
@@ -23,9 +24,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import * as WebBrowser from "expo-web-browser";
 import * as Linking from "expo-linking";
 import { useLocalSearchParams } from "expo-router";
- 
 import * as Notifications from "expo-notifications";
- 
+
+import { registerForPushNotifications } from "../../lib/notifications";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -36,7 +37,6 @@ Notifications.setNotificationHandler({
     shouldSetBadge: false,
   }),
 });
-import { registerForPushNotifications } from "../../lib/notifications";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -47,32 +47,30 @@ WebBrowser.maybeCompleteAuthSession();
 const WEBSITE_URL = "https://zeriy.vercel.app";
 const MOBILE_LOGIN_URL = `${WEBSITE_URL}/mobile-login`;
 
-// FIX 1: build the callback URL with Linking.createURL so it is exactly
-// "zeriy://auth/callback" (two slashes) and matches the server redirect.
 const AUTH_CALLBACK_URL = Linking.createURL("auth/callback");
 
 const PRIMARY_COLOR = "#6C3CE9";
 const SPLASH_BACKGROUND = "#080824";
 
-// Persistent across re-renders/navigations to prevent duplicate exchanges
 const processedCodes = new Set();
 
 // ==========================================
-// EXTERNAL LINKS (Google Maps, tel:, etc.)
+// EXTERNAL LINKS
 // ==========================================
 
-// Google Maps web links (but NOT embedded map iframes)
 const isMapsUrl = (url) =>
   (/^https?:\/\/(www\.)?google\.[a-z.]+\/maps/i.test(url) ||
     /^https?:\/\/maps\.google\.[a-z.]+/i.test(url) ||
     /^https?:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps)/i.test(url)) &&
   !/\/maps\/embed/i.test(url);
 
-// Turns intent://maps.google.com/...#Intent;scheme=https;... into https://maps.google.com/...
 const intentToHttps = (url) => {
   const m = url.match(/^intent:\/\/(.*?)#Intent;(.*)$/i);
+
   if (!m) return null;
+
   const scheme = (m[2].match(/scheme=([^;]+)/) || [])[1] || "https";
+
   return `${scheme}://${m[1]}`;
 };
 
@@ -87,7 +85,11 @@ const openExternal = async (rawUrl) => {
     await Linking.openURL(url);
   } catch (e) {
     console.log("Could not open external URL:", url, e);
-    Alert.alert("Unable to open", "No app was found to open this link.");
+
+    Alert.alert(
+      "Unable to open",
+      "No app was found to open this link."
+    );
   }
 };
 
@@ -100,16 +102,17 @@ export default function HomeScreen() {
   const [canGoBack, setCanGoBack] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
 
-  // FIX 2: control the WebView through state instead of injectJavaScript
-  const [source, setSource] = useState({ uri: WEBSITE_URL });
+  const [source, setSource] = useState({
+    uri: WEBSITE_URL,
+  });
 
   const routeParams = useLocalSearchParams();
 
-  const fadeAnim = useRef(new Animated.Value(1)).current;
   const webViewRef = useRef(null);
 
+  const fadeAnim = useRef(new Animated.Value(1)).current;
   const splashHidden = useRef(false);
-  const splashTimer = useRef(null);
+
   const loginInProgress = useRef(false);
   const exchangeInProgress = useRef(false);
   const exchangeTimer = useRef(null);
@@ -126,7 +129,7 @@ export default function HomeScreen() {
 
     Animated.timing(fadeAnim, {
       toValue: 0,
-      duration: 600,
+      duration: 500,
       useNativeDriver: true,
     }).start(({ finished }) => {
       if (finished) {
@@ -140,13 +143,13 @@ export default function HomeScreen() {
   // ==========================================
 
   const performSessionExchange = useCallback((code) => {
-    if (!code || processedCodes.has(code)) {
-      return;
-    }
+    if (!code || processedCodes.has(code)) return;
 
     processedCodes.add(code);
+
     exchangeInProgress.current = true;
     exchangeNavigationSeen.current = false;
+
     setAuthLoading(true);
 
     const exchangeUrl =
@@ -157,11 +160,11 @@ export default function HomeScreen() {
       clearTimeout(exchangeTimer.current);
     }
 
-    // Timeout protection
     exchangeTimer.current = setTimeout(() => {
       if (exchangeInProgress.current) {
         exchangeInProgress.current = false;
         exchangeNavigationSeen.current = false;
+
         setAuthLoading(false);
 
         Alert.alert(
@@ -171,44 +174,61 @@ export default function HomeScreen() {
       }
     }, 30000);
 
-    // FIX 2: load the exchange URL by changing the WebView source.
-    // The server sets the NextAuth session cookie inside the WebView
-    // and redirects to the website.
-    setSource({ uri: exchangeUrl });
+    setSource({
+      uri: exchangeUrl,
+    });
   }, []);
 
-  // Check incoming route params (e.g. from /auth/callback redirect)
+  // ==========================================
+  // ROUTE PARAMS
+  // ==========================================
+
   useEffect(() => {
     const code = routeParams?.code || routeParams?.auth_code;
+
     if (code) {
       performSessionExchange(String(code));
     }
   }, [routeParams, performSessionExchange]);
 
-  // Check incoming deep links via Linking event
+  // ==========================================
+  // DEEP LINKS
+  // ==========================================
+
   useEffect(() => {
     const handleUrlEvent = (event) => {
       if (!event?.url) return;
 
       try {
         const parsed = Linking.parse(event.url);
+
         const code =
-          parsed.queryParams?.code || parsed.queryParams?.auth_code;
+          parsed.queryParams?.code ||
+          parsed.queryParams?.auth_code;
+
         if (code) {
           performSessionExchange(String(code));
           return;
         }
       } catch (e) {
-        // ignore parse error
+        console.log("Deep link parse error:", e);
       }
 
-      const match = event.url.match(/[?&](?:code|auth_code)=([^&]+)/);
-      if (match && match[1]) {
-        performSessionExchange(decodeURIComponent(match[1]));
+      const match = event.url.match(
+        /[?&](?:code|auth_code)=([^&]+)/
+      );
+
+      if (match?.[1]) {
+        performSessionExchange(
+          decodeURIComponent(match[1])
+        );
       }
     };
 
-    const subscription = Linking.addEventListener("url", handleUrlEvent);
+    const subscription = Linking.addEventListener(
+      "url",
+      handleUrlEvent
+    );
 
     Linking.getInitialURL().then((url) => {
       if (url) {
@@ -224,7 +244,10 @@ export default function HomeScreen() {
   // ==========================================
 
   const handleGoogleLogin = useCallback(async () => {
-    if (loginInProgress.current || exchangeInProgress.current) {
+    if (
+      loginInProgress.current ||
+      exchangeInProgress.current
+    ) {
       return;
     }
 
@@ -242,14 +265,20 @@ export default function HomeScreen() {
 
         try {
           const parsed = Linking.parse(result.url);
-          code = parsed.queryParams?.code || parsed.queryParams?.auth_code;
+
+          code =
+            parsed.queryParams?.code ||
+            parsed.queryParams?.auth_code;
         } catch (e) {
-          // ignore
+          console.log("Login URL parse error:", e);
         }
 
         if (!code) {
-          const match = result.url.match(/[?&](?:code|auth_code)=([^&]+)/);
-          if (match && match[1]) {
+          const match = result.url.match(
+            /[?&](?:code|auth_code)=([^&]+)/
+          );
+
+          if (match?.[1]) {
             code = decodeURIComponent(match[1]);
           }
         }
@@ -263,6 +292,7 @@ export default function HomeScreen() {
 
       if (!exchangeInProgress.current) {
         setAuthLoading(false);
+
         Alert.alert(
           "Login failed",
           error.message || "Unable to login."
@@ -271,7 +301,6 @@ export default function HomeScreen() {
     } finally {
       loginInProgress.current = false;
 
-      // Keep auth overlay active if exchange was triggered
       setTimeout(() => {
         if (!exchangeInProgress.current) {
           setAuthLoading(false);
@@ -284,172 +313,177 @@ export default function HomeScreen() {
   // WEBSITE MESSAGE
   // ==========================================
 
+  const handleWebViewMessage = useCallback(
+    async (event) => {
+      const message = event.nativeEvent.data;
 
+      // Google Login
+      if (message === "ZERIY_GOOGLE_LOGIN") {
+        handleGoogleLogin();
+        return;
+      }
 
-const handleWebViewMessage = useCallback(
-  async (event) => {
-    const message = event.nativeEvent.data;
+      // Native Push Notification
+      if (message === "ZERIY_REGISTER_PUSH") {
+        try {
+          const token = await registerForPushNotifications();
 
-    // 1. Google Login
-    if (message === "ZERIY_GOOGLE_LOGIN") {
-      handleGoogleLogin();
-      return;
-    }
+          if (!token) {
+            throw new Error(
+              "Unable to generate Expo push token."
+            );
+          }
 
-    // 2. Native Push Notification
-    if (message === "ZERIY_REGISTER_PUSH") {
-      try {
-        const token = await registerForPushNotifications();
+          webViewRef.current?.injectJavaScript(`
+            window.dispatchEvent(
+              new CustomEvent("ZERIY_PUSH_TOKEN", {
+                detail: ${JSON.stringify(token)}
+              })
+            );
+            true;
+          `);
+        } catch (error) {
+          console.error("Native push error:", error);
 
-        if (!token) {
-          throw new Error("Unable to generate Expo push token.");
+          webViewRef.current?.injectJavaScript(`
+            window.dispatchEvent(
+              new CustomEvent("ZERIY_PUSH_ERROR", {
+                detail: ${JSON.stringify(
+                  error.message || "Push registration failed"
+                )}
+              })
+            );
+            true;
+          `);
         }
 
+        return;
+      }
+
+      // GPS REQUEST
+      let payload;
+
+      try {
+        payload = JSON.parse(message);
+      } catch {
+        return;
+      }
+
+      if (
+        payload?.type !== "ZERIY_GET_CURRENT_LOCATION"
+      ) {
+        return;
+      }
+
+      // Send GPS result to website
+      const sendLocationResult = (result) => {
         webViewRef.current?.injectJavaScript(`
           window.dispatchEvent(
-            new CustomEvent("ZERIY_PUSH_TOKEN", {
-              detail: ${JSON.stringify(token)}
+            new CustomEvent("zeriy:native-location", {
+              detail: ${JSON.stringify({
+                requestId: payload.requestId,
+                ...result,
+              })}
             })
           );
           true;
         `);
+      };
+
+      try {
+        let { status } =
+          await Location.getForegroundPermissionsAsync();
+
+        if (status !== "granted") {
+          const permission =
+            await Location.requestForegroundPermissionsAsync();
+
+          status = permission.status;
+        }
+
+        if (status !== "granted") {
+          throw new Error(
+            "Please allow location permission."
+          );
+        }
+
+        const servicesEnabled =
+          await Location.hasServicesEnabledAsync();
+
+        if (!servicesEnabled) {
+          throw new Error(
+            "Please turn on Location/GPS on your phone."
+          );
+        }
+
+        const position =
+          await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.High,
+          });
+
+        sendLocationResult({
+          success: true,
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+        });
       } catch (error) {
-        console.error("Native push error:", error);
+        console.error("Native GPS error:", error);
 
-        webViewRef.current?.injectJavaScript(`
-          window.dispatchEvent(
-            new CustomEvent("ZERIY_PUSH_ERROR", {
-              detail: ${JSON.stringify(
-                error.message || "Push registration failed"
-              )}
-            })
-          );
-          true;
-        `);
+        sendLocationResult({
+          success: false,
+          error:
+            error.message ||
+            "Unable to get current location.",
+        });
       }
-
-      return;
-    }
-
-    // 3. Parse GPS request from website
-    let payload;
-
-    try {
-      payload = JSON.parse(message);
-    } catch {
-      return;
-    }
-
-    if (payload?.type !== "ZERIY_GET_CURRENT_LOCATION") {
-      return;
-    }
-
-    // Send GPS result back to website
-    const sendLocationResult = (result) => {
-      webViewRef.current?.injectJavaScript(`
-        window.dispatchEvent(
-          new CustomEvent("zeriy:native-location", {
-            detail: ${JSON.stringify({
-              requestId: payload.requestId,
-              ...result,
-            })}
-          })
-        );
-        true;
-      `);
-    };
-
-    try {
-      // Check location permission
-      let { status } =
-        await Location.getForegroundPermissionsAsync();
-
-      // Request permission if not granted
-      if (status !== "granted") {
-        const permission =
-          await Location.requestForegroundPermissionsAsync();
-
-        status = permission.status;
-      }
-
-      if (status !== "granted") {
-        throw new Error("Please allow location permission.");
-      }
-
-      // Check whether device location services are enabled
-      const servicesEnabled =
-        await Location.hasServicesEnabledAsync();
-
-      if (!servicesEnabled) {
-        throw new Error(
-          "Please turn on Location/GPS on your phone."
-        );
-      }
-
-      // Get actual GPS coordinates
-      const position = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      });
-
-      sendLocationResult({
-        success: true,
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracy: position.coords.accuracy,
-      });
-
-    } catch (error) {
-      console.error("Native GPS error:", error);
-
-      sendLocationResult({
-        success: false,
-        error:
-          error.message || "Unable to get current location.",
-      });
-    }
-  },
-  [handleGoogleLogin]
-);
-
-
+    },
+    [handleGoogleLogin]
+  );
 
   // ==========================================
-  // INTERCEPT WEBVIEW NAVIGATION TO GOOGLE
+  // WEBVIEW NAVIGATION
   // ==========================================
 
   const handleShouldStartLoadWithRequest = useCallback(
     (request) => {
       const { url } = request;
 
-      // Embedded content (iframes) always stays inside the page
+      // Keep embedded content inside WebView
       if (request.isTopFrame === false) {
         return true;
       }
 
-      // Always allow the mobile auth exchange endpoint
+      // Allow authentication exchange
       if (url.includes("mobile-auth/exchange")) {
         return true;
       }
 
-      // Non-web links: geo:, google.navigation:, intent:, tel:, mailto:, whatsapp: ...
+      // External/non-web links
       if (!/^https?:\/\//i.test(url)) {
-        if (/^(about:|data:|blob:|javascript:)/i.test(url)) {
+        if (
+          /^(about:|data:|blob:|javascript:)/i.test(url)
+        ) {
           return true;
         }
+
         openExternal(url);
         return false;
       }
 
-      // Google Maps / Get Directions -> open the Google Maps app
+      // Google Maps
       if (isMapsUrl(url)) {
         openExternal(url);
         return false;
       }
 
-      // Intercept Google OAuth or mobile-login navigations inside the WebView
+      // Google OAuth
       if (
         url.includes("accounts.google.com") ||
-        (url.startsWith(WEBSITE_URL) && url.includes("/mobile-login"))
+        (
+          url.startsWith(WEBSITE_URL) &&
+          url.includes("/mobile-login")
+        )
       ) {
         handleGoogleLogin();
         return false;
@@ -464,44 +498,53 @@ const handleWebViewMessage = useCallback(
   // NAVIGATION STATE
   // ==========================================
 
-  const handleNavigationChange = useCallback((navState) => {
-    setCanGoBack(navState.canGoBack);
+  const handleNavigationChange = useCallback(
+    (navState) => {
+      setCanGoBack(navState.canGoBack);
 
-    const url = navState.url || "";
-    const isExchangeUrl = url.includes("mobile-auth/exchange");
+      const url = navState.url || "";
 
-    if (exchangeInProgress.current && isExchangeUrl) {
-      exchangeNavigationSeen.current = true;
-    }
+      const isExchangeUrl = url.includes(
+        "mobile-auth/exchange"
+      );
 
-    // When the exchange finishes and redirects to the website
-    if (
-      exchangeInProgress.current &&
-      (exchangeNavigationSeen.current || !isExchangeUrl) &&
-      url.startsWith(WEBSITE_URL) &&
-      !isExchangeUrl
-    ) {
-      exchangeInProgress.current = false;
-      exchangeNavigationSeen.current = false;
-
-      if (exchangeTimer.current) {
-        clearTimeout(exchangeTimer.current);
-        exchangeTimer.current = null;
+      if (
+        exchangeInProgress.current &&
+        isExchangeUrl
+      ) {
+        exchangeNavigationSeen.current = true;
       }
 
-      setAuthLoading(false);
-    }
-  }, []);
+      if (
+        exchangeInProgress.current &&
+        (
+          exchangeNavigationSeen.current ||
+          !isExchangeUrl
+        ) &&
+        url.startsWith(WEBSITE_URL) &&
+        !isExchangeUrl
+      ) {
+        exchangeInProgress.current = false;
+        exchangeNavigationSeen.current = false;
+
+        if (exchangeTimer.current) {
+          clearTimeout(exchangeTimer.current);
+          exchangeTimer.current = null;
+        }
+
+        setAuthLoading(false);
+      }
+    },
+    []
+  );
 
   // ==========================================
   // WEBVIEW LOAD END
   // ==========================================
 
-const handleLoadEnd = useCallback(() => {
-  if (splashHidden.current) return;
-
-  hideSplash();
-}, [hideSplash]);
+  const handleLoadEnd = useCallback(() => {
+    hideSplash();
+  }, [hideSplash]);
 
   // ==========================================
   // WEBVIEW ERROR
@@ -509,7 +552,13 @@ const handleLoadEnd = useCallback(() => {
 
   const handleWebViewError = useCallback(
     (event) => {
-      console.log("WebView error:", event.nativeEvent);
+      console.log(
+        "WebView error:",
+        event.nativeEvent
+      );
+
+      // Hide splash if initial website loading fails
+      hideSplash();
 
       if (exchangeInProgress.current) {
         exchangeInProgress.current = false;
@@ -526,8 +575,6 @@ const handleLoadEnd = useCallback(() => {
           "Login failed",
           "Unable to establish your session."
         );
-      } else {
-        hideSplash();
       }
     },
     [hideSplash]
@@ -540,7 +587,11 @@ const handleLoadEnd = useCallback(() => {
   const handleHttpError = useCallback((event) => {
     const { url, statusCode } = event.nativeEvent;
 
-    console.log("HTTP error:", statusCode, url);
+    console.log(
+      "HTTP error:",
+      statusCode,
+      url
+    );
 
     if (
       exchangeInProgress.current &&
@@ -569,8 +620,6 @@ const handleLoadEnd = useCallback(() => {
 
   useEffect(() => {
     const backAction = () => {
-      if (showSplash) return true;
-
       if (canGoBack && webViewRef.current) {
         webViewRef.current.goBack();
         return true;
@@ -585,80 +634,52 @@ const handleLoadEnd = useCallback(() => {
     );
 
     return () => handler.remove();
-  }, [canGoBack, showSplash]);
-
+  }, [canGoBack]);
 
   // ==========================================
-  // LOCATION PERMISSION
+  // NATIVE PUSH NOTIFICATION TAP HANDLING
   // ==========================================
 
+  useEffect(() => {
+    const handleNotificationTap = (response) => {
+      const data =
+        response.notification.request.content.data;
 
-//useEffect(() => {
-//  const checkLocationPermission = async () => {
-//    try {
-//      const { status } =
-//        await Location.getForegroundPermissionsAsync();
+      const notificationUrl = data?.url;
 
-//      if (status === "undetermined") {
-//        await Location.requestForegroundPermissionsAsync();
-//      }
-//    } catch (error) {
-//      console.log("Location permission error:", error);
-//    }
-//  };
-
-//  checkLocationPermission();
-//}, []);
-
-
-// ==========================================
-// NATIVE PUSH NOTIFICATION TAP HANDLING
-// ==========================================
-
-useEffect(() => {
-  const handleNotificationTap = (response) => {
-    const data =
-      response.notification.request.content.data;
-
-    const notificationUrl = data?.url;
-
-    if (
-      typeof notificationUrl !== "string" ||
-      !notificationUrl.startsWith("/") ||
-      notificationUrl.startsWith("//")
-    ) {
-      return;
-    }
-
-    // Open the notification destination inside Zeriy WebView.
-    setSource({
-      uri: `${WEBSITE_URL}${notificationUrl}`,
-    });
-
- 
-  };
-
-  // Handle notification tapped while app is running/backgrounded.
-  const subscription =
-    Notifications.addNotificationResponseReceivedListener(
-      handleNotificationTap
-    );
-
-  // Handle notification that launched the app from a closed state.
-  Notifications.getLastNotificationResponseAsync()
-    .then((response) => {
-      if (response) {
-        handleNotificationTap(response);
+      if (
+        typeof notificationUrl !== "string" ||
+        !notificationUrl.startsWith("/") ||
+        notificationUrl.startsWith("//")
+      ) {
+        return;
       }
-    })
-    .catch((error) => {
-      console.log("Notification response error:", error);
-    });
 
-  return () => subscription.remove();
-}, []);
+      setSource({
+        uri: `${WEBSITE_URL}${notificationUrl}`,
+      });
+    };
 
+    const subscription =
+      Notifications.addNotificationResponseReceivedListener(
+        handleNotificationTap
+      );
 
+    Notifications.getLastNotificationResponseAsync()
+      .then((response) => {
+        if (response) {
+          handleNotificationTap(response);
+        }
+      })
+      .catch((error) => {
+        console.log(
+          "Notification response error:",
+          error
+        );
+      });
+
+    return () => subscription.remove();
+  }, []);
 
   // ==========================================
   // CLEANUP
@@ -666,10 +687,6 @@ useEffect(() => {
 
   useEffect(() => {
     return () => {
-      if (splashTimer.current) {
-        clearTimeout(splashTimer.current);
-      }
-
       if (exchangeTimer.current) {
         clearTimeout(exchangeTimer.current);
       }
@@ -688,37 +705,58 @@ useEffect(() => {
         translucent={false}
       />
 
-      <SafeAreaView style={styles.safeArea} edges={["top"]}>
+      <SafeAreaView
+        style={styles.safeArea}
+        edges={["top"]}
+      >
         <WebView
           ref={webViewRef}
           source={source}
           style={styles.webview}
+
           javaScriptEnabled={true}
           domStorageEnabled={true}
+
           sharedCookiesEnabled={true}
           thirdPartyCookiesEnabled={true}
+
           allowsBackForwardNavigationGestures={true}
           setSupportMultipleWindows={false}
+
           originWhitelist={["*"]}
           mixedContentMode="never"
           cacheEnabled={true}
+
           onMessage={handleWebViewMessage}
-          onShouldStartLoadWithRequest={handleShouldStartLoadWithRequest}
-          onNavigationStateChange={handleNavigationChange}
+
+          onShouldStartLoadWithRequest={
+            handleShouldStartLoadWithRequest
+          }
+
+          onNavigationStateChange={
+            handleNavigationChange
+          }
+
           onLoadEnd={handleLoadEnd}
           onError={handleWebViewError}
           onHttpError={handleHttpError}
+
           geolocationEnabled={true}
         />
       </SafeAreaView>
 
-    
-
-      {/* SPLASH */}
+      {/* =====================================
+          ZERIY CUSTOM SPLASH SCREEN
+      ===================================== */}
 
       {showSplash && (
         <Animated.View
-          style={[styles.splashScreen, { opacity: fadeAnim }]}
+          style={[
+            styles.splashScreen,
+            {
+              opacity: fadeAnim,
+            },
+          ]}
         >
           <Image
             source={require("@/assets/images/icon.png")}
@@ -726,7 +764,9 @@ useEffect(() => {
             resizeMode="contain"
           />
 
-          <Text style={styles.tagline}>Made Simple Much Faster</Text>
+          <Text style={styles.tagline}>
+            Made Simple Much Faster
+          </Text>
 
           <ActivityIndicator
             size="small"
@@ -759,37 +799,42 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
   },
 
+  // SPLASH SCREEN
   splashScreen: {
     position: "absolute",
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: SPLASH_BACKGROUND,
+
+    backgroundColor: "#080824",
+
     justifyContent: "center",
     alignItems: "center",
+
     zIndex: 9999,
     elevation: 9999,
   },
 
+  // LOGO
   logo: {
-    width: 230,
-    height: 230,
-    borderRadius: 70,
-    marginBottom: 20,
+    width: 180,
+    height: 180,
+    borderRadius: 40,
+    marginBottom: 18,
   },
 
+  // TAGLINE
   tagline: {
-    fontSize: 19,
+    fontSize: 17,
     fontWeight: "600",
     color: "#FFFFFF",
-    letterSpacing: 1,
+    letterSpacing: 0.8,
     textAlign: "center",
   },
 
+  // LOADING SPINNER
   splashLoader: {
     marginTop: 25,
   },
-
-
 });
