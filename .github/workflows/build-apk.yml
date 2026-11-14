@@ -1,17 +1,8 @@
 
-name: Build Zeriy Android
+name: Build Zeriy Android APK
 
 on:
   workflow_dispatch:
-    inputs:
-      build_type:
-        description: Select build type
-        required: true
-        type: choice
-        options:
-          - apk
-          - aab
-          - both
 
   push:
     branches:
@@ -19,7 +10,7 @@ on:
 
 jobs:
   build:
-    name: Build Android
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
@@ -35,17 +26,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Setup Expo and EAS
+      - name: Install EAS CLI
         run: npm install -g eas-cli
 
       - name: Build APK
-        if: ${{ github.event_name == 'push' || inputs.build_type == 'apk' || inputs.build_type == 'both' }}
         run: eas build --platform android --profile preview --non-interactive
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-
-      - name: Build AAB
-        if: ${{ github.event_name == 'push' || inputs.build_type == 'aab' || inputs.build_type == 'both' }}
-        run: eas build --platform android --profile production --non-interactive
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
