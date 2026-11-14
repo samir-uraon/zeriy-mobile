@@ -2,7 +2,7 @@
   "expo": {
     "name": "Zeriy",
     "slug": "zeriy",
-    "owner": "zeriy2026",
+    "owner": "samiruraon",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -74,7 +74,7 @@
         }
       },
       "eas": {
-        "projectId": "f582edbc-ca81-4641-86fa-12aa2d161375"
+        "projectId": "ef4f14b8-f2c2-42b2-8e4b-4b9110c99d82"
       }
     }
   }
