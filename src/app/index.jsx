@@ -25,6 +25,17 @@ import * as Linking from "expo-linking";
 import { useLocalSearchParams } from "expo-router";
  
 import * as Notifications from "expo-notifications";
+ 
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 import { registerForPushNotifications } from "../../lib/notifications";
 
 WebBrowser.maybeCompleteAuthSession();
